@@ -342,19 +342,88 @@ export function initHeroAnimation(canvasId: string): void {
     }
   }
 
-  function drawStatic(): void {
+  // Static fallback for prefers-reduced-motion: renders the full three-stage
+  // burn -> attest -> mint flow as labelled nodes joined by straight segments,
+  // so the corridor reads without any animation. Uses the same palette/geometry
+  // as the animated path (pathPoint) so both modes stay visually consistent.
+  function drawStaticFrame(): void {
     ctx!.clearRect(0, 0, W, H);
     drawGrid();
     drawGuide();
-    [0.15, 0.5, 0.85].forEach((p) => {
-      const pt = pathPoint(p);
-      ctx!.beginPath();
-      ctx!.fillStyle = rgba(tokenColor(p), 0.95);
-      ctx!.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
-      ctx!.fill();
+
+    const stages: { p: number; color: Rgb; stage: string; chain: string }[] = [
+      { p: 0, color: colors.burn, stage: "BURN", chain: "ARC" },
+      { p: 0.5, color: colors.attest, stage: "ATTEST", chain: "IRIS" },
+      { p: 1, color: colors.mint, stage: "MINT", chain: "STELLAR" },
+    ];
+
+    // Straight connectors between consecutive stages.
+    ctx!.beginPath();
+    ctx!.lineWidth = 2;
+    ctx!.strokeStyle = colors.rule;
+    stages.forEach((s, i) => {
+      const pt = pathPoint(s.p);
+      if (i === 0) ctx!.moveTo(pt.x, pt.y);
+      else ctx!.lineTo(pt.x, pt.y);
     });
-    drawNode(x0, baseline, colors.burn, "ARC", 0);
-    drawNode(x1, baseline, colors.mint, "STELLAR", 0);
+    ctx!.stroke();
+
+    // Arrowheads pointing along the flow direction.
+    for (let i = 1; i < stages.length; i++) {
+      const a = pathPoint(stages[i - 1]!.p);
+      const b = pathPoint(stages[i]!.p);
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      const tipX = b.x - Math.cos(ang) * 16;
+      const tipY = b.y - Math.sin(ang) * 16;
+      ctx!.beginPath();
+      ctx!.fillStyle = colors.rule;
+      ctx!.moveTo(tipX, tipY);
+      ctx!.lineTo(tipX - Math.cos(ang - 0.42) * 9, tipY - Math.sin(ang - 0.42) * 9);
+      ctx!.lineTo(tipX - Math.cos(ang + 0.42) * 9, tipY - Math.sin(ang + 0.42) * 9);
+      ctx!.closePath();
+      ctx!.fill();
+    }
+
+    for (const s of stages) {
+      const pt = pathPoint(s.p);
+      ctx!.beginPath();
+      ctx!.fillStyle = rgba(s.color, 1);
+      ctx!.arc(pt.x, pt.y, 9, 0, Math.PI * 2);
+      ctx!.fill();
+      ctx!.beginPath();
+      ctx!.strokeStyle = colors.paper;
+      ctx!.lineWidth = 2.5;
+      ctx!.arc(pt.x, pt.y, 9, 0, Math.PI * 2);
+      ctx!.stroke();
+
+      ctx!.font =
+        "700 12px ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace";
+      ctx!.fillStyle = colors.slate;
+      ctx!.textAlign = "center";
+      ctx!.textBaseline = "top";
+      ctx!.fillText(s.stage, pt.x, pt.y + 16);
+      ctx!.font =
+        "400 11px ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace";
+      ctx!.fillText(s.chain, pt.x, pt.y + 32);
+    }
+  }
+
+  // The canvas is purely decorative while animating, but the static fallback
+  // conveys the burn/attest/mint flow, so expose it as an image with a text
+  // alternative only in the reduced-motion case.
+  function updateCanvasA11y(staticMode: boolean): void {
+    if (staticMode) {
+      canvas!.removeAttribute("aria-hidden");
+      canvas!.setAttribute("role", "img");
+      canvas!.setAttribute(
+        "aria-label",
+        "Static diagram of the Parabola flow: tokens burn on Arc, are attested by Iris, and mint on Stellar.",
+      );
+    } else {
+      canvas!.setAttribute("aria-hidden", "true");
+      canvas!.removeAttribute("role");
+      canvas!.removeAttribute("aria-label");
+    }
   }
 
   let rafId: number | null = null;
@@ -362,7 +431,7 @@ export function initHeroAnimation(canvasId: string): void {
   function frame(now: number): void {
     if (reduceMotion.matches) {
       rafId = null;
-      drawStatic();
+      drawStaticFrame();
       return;
     }
     ctx!.clearRect(0, 0, W, H);
@@ -392,20 +461,22 @@ export function initHeroAnimation(canvasId: string): void {
       cancelAnimationFrame(rafId);
       rafId = null;
     }
+    updateCanvasA11y(reduceMotion.matches);
     if (reduceMotion.matches) {
-      drawStatic();
+      drawStaticFrame();
     } else {
       rafId = requestAnimationFrame(frame);
     }
   }
 
   reduceMotion.addEventListener("change", () => {
+    updateCanvasA11y(reduceMotion.matches);
     if (reduceMotion.matches) {
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
         rafId = null;
       }
-      drawStatic();
+      drawStaticFrame();
     } else if (rafId === null) {
       rafId = requestAnimationFrame(frame);
     }
@@ -413,7 +484,7 @@ export function initHeroAnimation(canvasId: string): void {
 
   window.addEventListener("resize", () => {
     layout();
-    if (reduceMotion.matches) drawStatic();
+    if (reduceMotion.matches) drawStaticFrame();
   });
 
   new MutationObserver(readColors).observe(document.documentElement, {
